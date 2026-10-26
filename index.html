@@ -266,7 +266,7 @@ function nongSvg(mood, size) {
     '<path class="'+m[2]+'" d="'+m[0]+'"/><path class="'+m[2]+'" d="'+m[1]+'"/><path class="'+m[4]+'" d="'+m[3]+'"/>'+(m[5] || '')+'</svg>';
 }
 
-var SYNC_URL='', SYNC_KEY='';   /* ใส่ลิงก์ Apps Script (และรหัส) ที่นี่ ดู INSTALL.md */
+var SYNC_URL='https://script.google.com/macros/s/AKfycbyE8OqfLFVR0mOM6Q3TOhtxjPnDwxRXKlF47FDRmcejET7OVzTTMD0Om_EXAq8OyyI2/exec', SYNC_KEY='';   /* ใส่ลิงก์ Apps Script (และรหัส) ที่นี่ ดู INSTALL.md */
 var syncOn=!!SYNC_URL, pending=0, lastLayout='', saveT=0;
 var state, mode='use', sel=null, scale=1, armed=null, armT=0, drag=null, seq=0, toastT=0;
 var $=function(id){return document.getElementById(id);};
