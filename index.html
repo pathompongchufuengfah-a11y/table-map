@@ -1,3 +1,9 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{color-scheme:dark;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}[hidden]{display:none!important}img{max-width:100%}</style>
 <title>ผังโต๊ะร้าน</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="theme-color" content="#21140D">
@@ -21,6 +27,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:"Noto Sans Thai 
   padding-block:10px 24px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 h1,h2,.btn,.num{font-family:var(--display);font-weight:700}
 h1,h2{margin:0}
+html{-webkit-text-size-adjust:100%}
+body{-webkit-tap-highlight-color:transparent;touch-action:manipulation;overscroll-behavior-y:none}
 button,input{font:inherit;color:inherit}
 button{border:0;background:none;cursor:pointer;touch-action:manipulation}
 :focus-visible{outline:3px solid var(--brand-500);outline-offset:2px}
@@ -148,6 +156,8 @@ input[type=text]{width:100%;min-height:48px;padding:8px 14px;border:2px solid va
 @media (prefers-reduced-motion:reduce){.tbl,.toast{transition:none}}
 </style>
 
+</head>
+<body>
 <div class="app" id="app">
   <header class="top">
     <div class="hd">
@@ -267,7 +277,7 @@ function nongSvg(mood, size) {
 }
 
 var SYNC_URL='https://script.google.com/macros/s/AKfycbyE8OqfLFVR0mOM6Q3TOhtxjPnDwxRXKlF47FDRmcejET7OVzTTMD0Om_EXAq8OyyI2/exec', SYNC_KEY='';   /* ใส่ลิงก์ Apps Script (และรหัส) ที่นี่ ดู INSTALL.md */
-var syncOn=!!SYNC_URL, pending=0, lastLayout='', saveT=0;
+var syncOn=!!SYNC_URL, lastLayout='', saveT=0, dirty={}, writeAt={}, flushing=false;
 var state, mode='use', sel=null, scale=1, armed=null, armT=0, drag=null, seq=0, toastT=0;
 var $=function(id){return document.getElementById(id);};
 var stage=$('stage'), sizer=$('sizer'), board=$('board');
@@ -382,36 +392,69 @@ function api(body){
   return fetch(SYNC_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)}).then(function(r){return r.json();});
 }
 function pull(){return fetch(SYNC_URL+(SYNC_URL.indexOf('?')<0?'?':'&')+'t='+Date.now()).then(function(r){return r.json();});}
-function track(p){
-  pending++;
-  p.then(function(){setSync(true);}).catch(function(){setSync(false);}).then(function(){pending--;});
+/* Status writes are optimistic: the table changes at once, the write is queued and retried.
+   A server answer that was requested before our latest write for that table is ignored,
+   so a slow poll can never flip a table back. */
+function queueStatus(id,status){
+  dirty[id]=status;writeAt[id]=Date.now();flush();
 }
-function applyRemote(d){
-  var changed=false;
+function flush(){
+  if(flushing||!syncOn)return;
+  var ids=Object.keys(dirty);if(!ids.length)return;
+  var batch={};ids.forEach(function(k){batch[k]=dirty[k];});
+  flushing=true;
+  api({action:'bulk',status:batch}).then(function(r){
+    if(!r||!r.ok)throw new Error('rejected');
+    var now=Date.now();
+    ids.forEach(function(k){if(dirty[k]===batch[k])delete dirty[k];writeAt[k]=now;});
+    setSync(true);return true;
+  }).catch(function(){setSync(false);return false;}).then(function(ok){
+    flushing=false;
+    if(ok)flush();else setTimeout(flush,3000);
+  });
+}
+function syncTableEls(){
+  stage.querySelectorAll('.tbl').forEach(function(el){
+    var it=byId(el.dataset.id);if(!it)return;
+    el.classList.remove('s-free','s-busy','s-resv');el.classList.add('s-'+it.status);
+    var st=el.querySelector('.st');if(st)st.textContent=SLABEL[it.status];
+    if(mode==='use')el.setAttribute('aria-label','โต๊ะ '+it.label+' '+SLABEL[it.status]);
+  });
+}
+function applyRemote(d,t0){
+  var layoutChanged=false,statusChanged=false;
   if(mode==='use'&&d.layout&&Array.isArray(d.layout.floors)){
     var s=JSON.stringify(d.layout.floors);
     if(s!==lastLayout){
       lastLayout=s;var cur=state.cur;state.floors=d.layout.floors;
-      state.cur=state.floors.some(function(f){return f.id===cur;})?cur:state.floors[0].id;changed=true;
+      state.cur=state.floors.some(function(f){return f.id===cur;})?cur:state.floors[0].id;layoutChanged=true;
     }
   }
   var st=d.status||{};
-  allTables().forEach(function(t){var v=st[t.id];if(v&&v!==t.status){t.status=v;changed=true;}});
-  if(changed){save();renderAll();}
+  allTables().forEach(function(t){
+    var v=st[t.id];
+    if(!v||v===t.status)return;
+    if(dirty[t.id]||(writeAt[t.id]||0)>=t0)return;
+    t.status=v;statusChanged=true;
+  });
+  if(layoutChanged){save();renderAll();}
+  else if(statusChanged){save();syncTableEls();renderStats();renderTabs();}
 }
 function poll(){
-  if(!syncOn||document.hidden||pending>0||drag)return;
-  pull().then(function(d){setSync(true);applyRemote(d);}).catch(function(){setSync(false);});
+  if(!syncOn||document.hidden||drag)return;
+  var t0=Date.now();
+  pull().then(function(d){setSync(true);applyRemote(d,t0);}).catch(function(){setSync(false);});
 }
 function startSync(){
   if(!syncOn){setSync(true);return;}
   pull().then(function(d){
     setSync(true);
-    if(!d.layout){lastLayout=JSON.stringify(state.floors);track(api({action:'layout',layout:{cur:state.cur,floors:state.floors}}));}
-    else applyRemote(d);
+    if(!d.layout){lastLayout=JSON.stringify(state.floors);api({action:'layout',layout:{cur:state.cur,floors:state.floors}}).catch(function(){});}
+    else applyRemote(d,0);
   }).catch(function(){setSync(false);});
-  setInterval(poll,5000);
+  setInterval(poll,4000);
   document.addEventListener('visibilitychange',poll);
+  window.addEventListener('focus',poll);
 }
 
 function curFloor(){return state.floors.filter(function(f){return f.id===state.cur;})[0]||state.floors[0];}
@@ -540,8 +583,8 @@ function select(id){
 /* ---------- actions ---------- */
 function setStatus(it){
   it.status=CYCLE[it.status]||'free';
-  save();renderStage();renderStats();renderTabs();toast(TOAST[it.status]);
-  if(syncOn)track(api({action:'status',id:it.id,status:it.status}));
+  save();syncTableEls();renderStats();renderTabs();toast(TOAST[it.status]);
+  if(syncOn)queueStatus(it.id,it.status);
 }
 function addItem(type){
   var d=TYPES[type],fl=curFloor(),k=(fl.items.length%6)*14;
@@ -692,10 +735,10 @@ $('resetAll').onclick=function(){
 $('clearAll').onclick=function(){
   var b=this;
   confirmTwice('clear',b,function(){
-    allTables().forEach(function(t){t.status='free';});
+    allTables().forEach(function(t){t.status='free';if(syncOn)dirty[t.id]='free',writeAt[t.id]=Date.now();});
     b.textContent='ล้างทุกโต๊ะให้ว่าง';b.classList.remove('warn');
-    save();renderStage();renderStats();renderTabs();toast('เคลียร์เรียบร้อย~ ว่างทุกโต๊ะแล้วน้า');
-    if(syncOn)track(api({action:'clear'}));
+    save();syncTableEls();renderStats();renderTabs();toast('เคลียร์เรียบร้อย~ ว่างทุกโต๊ะแล้วน้า');
+    flush();
   });
 };
 
@@ -707,3 +750,5 @@ document.body.dataset.mode='use';
 renderAll();renderInspector();startSync();
 })();
 </script>
+</body>
+</html>
